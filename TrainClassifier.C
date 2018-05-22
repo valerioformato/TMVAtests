@@ -27,6 +27,7 @@
 /// \author Andreas Hoecker
 
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
 #include <map>
 #include <string>
@@ -50,9 +51,35 @@ using namespace TMVA;
 vector<std::string> inputFiles = {
   "../data/pass6.root",
 };
-Long64_t nEntries = 3e5+1;
+Long64_t nEntries = 1.5e5+1;
+// Long64_t nEntries = 1e4+1;
 
-TTree* GetTrainingTree(){
+Int_t detCat = 3; //1-Tof, 2-NaF, 3-Agl
+TString detNames[] = {"ERROR", "Tof", "NaF", "Agl"};
+
+static std::vector<TString> trainingVars = {
+  "TofChiSqC",
+  "TofChiSqT",
+  "TofIso",
+  "TrEdepL2On",
+  "TrEdepL2Off",
+  // "TrEdepInnOff",
+  "TrChiSqKaY",
+  "TrChiSqKaX",
+  "TrQMin",
+  "TrQAsymm"
+};
+static std::vector<TString> spectatorVars = {
+  "Category",
+  "Mass",
+  "Beta",
+  "Rigidity",
+  "RichBDT"
+};
+
+TTree* GetTrainingTree(Int_t _detCat = detCat){
+
+  cout << "_detCat is " << _detCat << endl;
 
   TFile* tempfile = new TFile(".temp.root", "recreate");
 
@@ -60,37 +87,75 @@ TTree* GetTrainingTree(){
 
   Float_t target;
 
+  TString pfilename = "../data/pdata_" + detNames[_detCat] + ".dat";
+  ofstream pfile(pfilename.Data(), ios::trunc);
+
+  std:map<TString, float> varMap;
+  for( auto variable : trainingVars ){
+    varMap[variable] = 0;
+  }
+
   for( auto infileName : inputFiles ){
     TFile* infile = TFile::Open( infileName.c_str() );
     TTree* _tempTree = (TTree*) infile->Get("VFTMVABuildTree/TrainingTree");
 
     Int_t cat;
+    Float_t Mass;
     _tempTree->SetBranchAddress("Category", &cat);
+    _tempTree->SetBranchAddress("Mass"    , &Mass);
+
+    for( auto variable : trainingVars ){
+      _tempTree->SetBranchAddress( variable, &(varMap[variable]) );
+    }
 
     tempfile->cd();
     TTree* _regTree = _tempTree->CloneTree(0);
 
     _regTree->Branch("Target", &target, "F");
 
-    int nSig=0, nBkg=0;
+    int nSig=0, nBkgp=0, nBkgn=0;
+
+    for( auto variable : trainingVars ){
+      pfile << setw(15) << variable;
+    }
+    pfile << setw(15) << "Target";
+    pfile << endl;
 
     for( Long64_t iEv=0; iEv<_tempTree->GetEntries(); iEv++){
       _tempTree->GetEntry(iEv);
+
+      if( (cat/10)%10 != _detCat ) continue;
 
       if( (cat % 10) == 1 && nSig < nEntries ){
         target = 1;
         nSig++;
       }
-      else if( (cat % 10) > 1 && nBkg < nEntries ){
+      else if( (cat % 10) > 1 && Mass > 0 && nBkgp < nEntries ){
         target = 0;
-        nBkg++;
+        nBkgp++;
+      }
+      else if( (cat % 10) > 1 && Mass < 0 && nBkgn < nEntries ){
+        target = 0;
+        nBkgn++;
       }
       else continue;
 
-      if( nSig >= nEntries && nBkg >= nEntries ) break;
+      // cout << iEv << " " << cat << " " << target << endl;
+      // break;
+
+      for( auto variable : trainingVars ){
+        pfile << setw(15) << varMap[variable];
+      }
+      pfile << setw(15) << target;
+      pfile << endl;
+
+      if( nSig >= nEntries && nBkgp >= nEntries && nBkgn >= nEntries ) break;
 
       _regTree->Fill();
     }
+
+    cout << "Tree filled with " << nSig << " signal, " << nBkgp << "-" << nBkgn
+    <<  " (+-) background" << endl;
 
     treelist->Add(_regTree);
   }
@@ -98,8 +163,13 @@ TTree* GetTrainingTree(){
   return TTree::MergeTrees(treelist);
 }
 
-void TrainClassifier( TString myMethodList = "" )
+void TrainClassifier( Int_t _detCat = detCat, TString myMethodList = "" )
 {
+
+  if( _detCat == 0 ){
+    cerr << "Categories available: 1-Tof, 2-NaF, 3-Agl" << endl;
+    return;
+  }
 
   // The explicit loading of the shared libTMVA is done in TMVAlogon.C, defined in .rootrc
   // if you use your private .rootrc, or run from a different directory, please copy the
@@ -113,8 +183,6 @@ void TrainClassifier( TString myMethodList = "" )
   //---------------------------------------------------------------
   // This loads the library
   TMVA::Tools::Instance();
-
-
 
   // Default MVA methods to be trained + tested
   std::map<std::string,int> Use;
@@ -161,7 +229,7 @@ void TrainClassifier( TString myMethodList = "" )
   Use["MLPBFGS"]         = 0; // Recommended ANN with optional training method
   Use["MLPBNN"]          = 0; // Recommended ANN with BFGS training method and bayesian regulator
   Use["CFMlpANN"]        = 0; // Depreciated ANN from ALEPH
-  Use["TMlpANN"]         = 1; // ROOT's own ANN
+  Use["TMlpANN"]         = 0; // ROOT's own ANN
   Use["DNN_GPU"]         = 0; // CUDA-accelerated DNN training.
   Use["DNN_CPU"]         = 1; // Multi-core accelerated DNN.
   //
@@ -170,10 +238,10 @@ void TrainClassifier( TString myMethodList = "" )
   //
   // Boosted Decision Trees
   Use["BDT"]             = 1; // uses Adaptive Boost
-  Use["BDTG"]            = 1; // uses Gradient Boost
+  Use["BDTG"]            = 0; // uses Gradient Boost
   Use["BDTB"]            = 1; // uses Bagging
-  Use["BDTD"]            = 1; // decorrelation + Adaptive Boost
-  Use["BDTF"]            = 1; // allow usage of fisher discriminant for node splitting
+  Use["BDTD"]            = 0; // decorrelation + Adaptive Boost
+  Use["BDTF"]            = 0; // allow usage of fisher discriminant for node splitting
   //
   // Friedman's RuleFit method, ie, an optimised series of cuts ("rules")
   Use["RuleFit"]         = 0;
@@ -205,7 +273,7 @@ void TrainClassifier( TString myMethodList = "" )
   // Here the preparation phase begins
 
   // Create a new root output file
-  TString outfileName( "TMVAClass.root" );
+  TString outfileName( Form("TMVAClass_%s.root", detNames[_detCat].Data()) );
   TFile* outputFile = TFile::Open( outfileName, "RECREATE" );
 
   // Create the factory object. Later you can choose the methods
@@ -229,27 +297,6 @@ void TrainClassifier( TString myMethodList = "" )
   //     (TMVA::gConfig().GetVariablePlotting()).fTimesRMS = 8.0;
   //     (TMVA::gConfig().GetIONames()).fWeightFileDir = "myWeightDirectory";
 
-
-  static std::vector<TString> trainingVars = {
-    "TofChiSqC",
-    "TofChiSqT",
-    "TofIso",
-    "TrEdepL2On",
-    "TrEdepL2Off",
-    "TrEdepInnOff",
-    "TrChiSqKaY",
-    "TrChiSqKaX",
-    "TrQMin",
-    "TrQAsymm"
-  };
-  static std::vector<TString> spectatorVars = {
-    "Category",
-    "Mass",
-    "Beta",
-    "Rigidity",
-    "RichBDT"
-  };
-
   // Define the input variables that shall be used for the MVA training
   // note that you may also use variable expressions, such as: "3*var1/var2*abs(var3)"
   // [all types of expressions that can also be parsed by TTree::Draw( "expression" )]
@@ -264,7 +311,7 @@ void TrainClassifier( TString myMethodList = "" )
     dataloader->AddSpectator( var, var, "", 'F' );
   }
 
-  TTree* regTree = GetTrainingTree();
+  TTree* regTree = GetTrainingTree(_detCat);
 
   // global event weights per tree (see below for setting event-wise weights)
   Double_t signalWeight     = 1.0;
@@ -276,7 +323,7 @@ void TrainClassifier( TString myMethodList = "" )
 
   // Apply additional cuts on the signal and background samples (can be different)
   TCut mycuts = "Target==1"; // for example: TCut mycuts = "abs(var1)<0.5 && abs(var2-0.5)<1";
-  TCut mycutb = "Target==0"; // for example: TCut mycutb = "abs(var1)<0.5";
+  TCut mycutb = "Target==0 && TMath::Abs(Mass) > 2.8"; // for example: TCut mycutb = "abs(var1)<0.5";
 
   // This would set individual event weights (the variables defined in the
   // expression need to exist in the original TTree)
@@ -296,7 +343,7 @@ void TrainClassifier( TString myMethodList = "" )
   // for training, and the other half for testing:
 
   dataloader->PrepareTrainingAndTestTree( mycuts, mycutb,
-                                       "nTrain_Signal=100000:nTrain_Background=100000:SplitMode=Random:NormMode=NumEvents:V" );
+                                       "SplitMode=Random:NormMode=NumEvents:V" );
 
   // Book MVA methods
   //
@@ -442,10 +489,11 @@ void TrainClassifier( TString myMethodList = "" )
   // Multi-architecture DNN implementation.
   if (Use["DNN_CPU"] or Use["DNN_GPU"]) {
      // General layout.
-     TString layoutString ("Layout=RELU|256,RELU|256,SIGMOID");
+     // TString layoutString ("Layout=RELU|256,RELU|256,RELU|256,SIGMOID");
+     TString layoutString ("Layout=RELU|384,RELU|384,RELU|384,SIGMOID");
 
      TString training0("LearningRate=1e-4,Momentum=0.5,Repetitions=1,ConvergenceSteps=100,BatchSize=256,"
-     "TestRepetitions=10,WeightDecay=0.01,Regularization=NONE,DropConfig=0.1,");
+     "TestRepetitions=10,WeightDecay=0.01,Regularization=NONE,DropConfig=0.2,");
 
      // // Training strategies.
      // TString training0("LearningRate=1e-1,Momentum=0.9,Repetitions=1,"
@@ -464,7 +512,9 @@ void TrainClassifier( TString myMethodList = "" )
      trainingStrategyString += training0;// + "|" + training1 + "|" + training2;
 
      // General Options.
-     TString dnnOptions("!H:V:ErrorStrategy=SUMOFSQUARES:VarTransform=G:WeightInitialization=XAVIER:Architecture=CPU");
+     // TString dnnOptions("!H:V:ErrorStrategy=SUMOFSQUARES:VarTransform=G:WeightInitialization=XAVIER");
+     // TString dnnOptions("!H:V:ErrorStrategy=SUMOFSQUARES:VarTransform=I:WeightInitialization=XAVIER");
+     TString dnnOptions("!H:V:ErrorStrategy=SUMOFSQUARES:WeightInitialization=XAVIER");
      dnnOptions.Append (":"); dnnOptions.Append (layoutString);
      dnnOptions.Append (":"); dnnOptions.Append (trainingStrategyString);
 
@@ -495,23 +545,23 @@ void TrainClassifier( TString myMethodList = "" )
   // Boosted Decision Trees
   if (Use["BDTG"]) // Gradient Boost
      factory->BookMethod( dataloader, TMVA::Types::kBDT, "BDTG",
-                          "!H:V:NTrees=500:MinNodeSize=2.5%:BoostType=Grad:Shrinkage=0.10:UseBaggedBoost:BaggedSampleFraction=0.5:nCuts=40:MaxDepth=2" );
+                          "!H:V:NTrees=800:MinNodeSize=2.5%:BoostType=Grad:Shrinkage=0.10:UseBaggedBoost:BaggedSampleFraction=0.5:nCuts=50:MaxDepth=5" );
 
   if (Use["BDT"])  // Adaptive Boost
      factory->BookMethod( dataloader, TMVA::Types::kBDT, "BDT",
-                          "!H:V:NTrees=500:MinNodeSize=2.5%:MaxDepth=3:BoostType=AdaBoost:AdaBoostBeta=0.5:UseBaggedBoost:BaggedSampleFraction=0.5:SeparationType=GiniIndex:nCuts=40" );
+                          "!H:V:NTrees=800:MinNodeSize=2.5%:MaxDepth=5:BoostType=AdaBoost:AdaBoostBeta=0.5:UseBaggedBoost:BaggedSampleFraction=0.5:SeparationType=GiniIndex:nCuts=50" );
 
   if (Use["BDTB"]) // Bagging
      factory->BookMethod( dataloader, TMVA::Types::kBDT, "BDTB",
-                          "!H:V:NTrees=500:BoostType=Bagging:SeparationType=GiniIndex:nCuts=40" );
+                          "!H:V:NTrees=800:BoostType=Bagging:SeparationType=GiniIndex:nCuts=50" );
 
   if (Use["BDTD"]) // Decorrelation + Adaptive Boost
      factory->BookMethod( dataloader, TMVA::Types::kBDT, "BDTD",
-                          "!H:V:NTrees=500:MinNodeSize=5%:MaxDepth=3:BoostType=AdaBoost:SeparationType=GiniIndex:nCuts=40:VarTransform=Decorrelate" );
+                          "!H:V:NTrees=800:MinNodeSize=5%:MaxDepth=5:BoostType=AdaBoost:SeparationType=GiniIndex:nCuts=50:VarTransform=Decorrelate" );
 
   if (Use["BDTF"])  // Allow Using Fisher discriminant in node splitting for (strong) linearly correlated variables
      factory->BookMethod( dataloader, TMVA::Types::kBDT, "BDTF",
-                          "!H:V:NTrees=50:MinNodeSize=2.5%:UseFisherCuts:MaxDepth=3:BoostType=AdaBoost:AdaBoostBeta=0.5:SeparationType=GiniIndex:nCuts=40" );
+                          "!H:V:NTrees=800:MinNodeSize=2.5%:UseFisherCuts:MaxDepth=5:BoostType=AdaBoost:AdaBoostBeta=0.5:SeparationType=GiniIndex:nCuts=50" );
 
   // RuleFit -- TMVA implementation of Friedman's method
   if (Use["RuleFit"])
@@ -553,19 +603,5 @@ void TrainClassifier( TString myMethodList = "" )
   // Launch the GUI for the root macros
   if (!gROOT->IsBatch()) TMVA::TMVAGui( outfileName );
 
-  return 0;
-}
-
-int main( int argc, char** argv )
-{
-  // Select methods (don't look at this code - not of interest)
-  TString methodList;
-  for (int i=1; i<argc; i++) {
-    TString regMethod(argv[i]);
-    if(regMethod=="-b" || regMethod=="--batch") continue;
-    if (!methodList.IsNull()) methodList += TString(",");
-    methodList += regMethod;
-  }
-  TrainClassifier(methodList);
   return 0;
 }

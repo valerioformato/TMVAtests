@@ -184,8 +184,8 @@ void TrainRegression( TString myMethodList = "" )
   // The second argument is the output file for the training results
   // All TMVA output can be suppressed by removing the "!" (not) in
   // front of the "Silent" argument in the option string
-  TMVA::Factory *factory = new TMVA::Factory( "TMVARegression", outputFile,
-  "V:!Silent:Color:DrawProgressBar:AnalysisType=Regression" );
+  TMVA::Factory *factory = new TMVA::Factory( "TMVAClassification", outputFile,
+  "V:!Silent:Color:DrawProgressBar:AnalysisType=Classification" );
 
 
   TMVA::DataLoader *dataloader=new TMVA::DataLoader("dataset");
