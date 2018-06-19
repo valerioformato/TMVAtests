@@ -490,9 +490,9 @@ void TrainClassifier( Int_t _detCat = detCat, TString myMethodList = "" )
   if (Use["DNN_CPU"] or Use["DNN_GPU"]) {
      // General layout.
      // TString layoutString ("Layout=RELU|256,RELU|256,RELU|256,SIGMOID");
-     TString layoutString ("Layout=RELU|384,RELU|384,RELU|384,SIGMOID");
+     TString layoutString ("Layout=RELU|384,RELU|384,RELU|384,RELU|128,SIGMOID");
 
-     TString training0("LearningRate=1e-4,Momentum=0.5,Repetitions=1,ConvergenceSteps=100,BatchSize=256,"
+     TString training0("LearningRate=5e-4,Momentum=0.5,Repetitions=1,ConvergenceSteps=120,BatchSize=256,"
      "TestRepetitions=10,WeightDecay=0.01,Regularization=NONE,DropConfig=0.2,");
 
      // // Training strategies.
@@ -512,9 +512,9 @@ void TrainClassifier( Int_t _detCat = detCat, TString myMethodList = "" )
      trainingStrategyString += training0;// + "|" + training1 + "|" + training2;
 
      // General Options.
-     // TString dnnOptions("!H:V:ErrorStrategy=SUMOFSQUARES:VarTransform=G:WeightInitialization=XAVIER");
+     TString dnnOptions("!H:V:ErrorStrategy=SUMOFSQUARES:VarTransform=G:WeightInitialization=XAVIER");
      // TString dnnOptions("!H:V:ErrorStrategy=SUMOFSQUARES:VarTransform=I:WeightInitialization=XAVIER");
-     TString dnnOptions("!H:V:ErrorStrategy=SUMOFSQUARES:WeightInitialization=XAVIER");
+     // TString dnnOptions("!H:V:ErrorStrategy=SUMOFSQUARES:WeightInitialization=XAVIER");
      dnnOptions.Append (":"); dnnOptions.Append (layoutString);
      dnnOptions.Append (":"); dnnOptions.Append (trainingStrategyString);
 
