@@ -51,23 +51,36 @@ using namespace TMVA;
 vector<std::string> inputFiles = {
   "../data/pass6.root",
 };
-Long64_t nEntries = 1.5e5+1;
-// Long64_t nEntries = 1e4+1;
+// Long64_t nEntries = 1.5e5+1;
+Long64_t nEntries = 1e4+1;
+
+// Int_t bkgType = 2; //high mass negatives
+Int_t bkgType = 3; //low mass negatives
 
 Int_t detCat = 3; //1-Tof, 2-NaF, 3-Agl
 TString detNames[] = {"ERROR", "Tof", "NaF", "Agl"};
 
 static std::vector<TString> trainingVars = {
-  "TofChiSqC",
-  "TofChiSqT",
-  "TofIso",
   "TrEdepL2On",
   "TrEdepL2Off",
-  // "TrEdepInnOff",
+  "TrEdepInnOff0",
+  "TrEdepInnOff1",
+  "TrChiSqChY",
+  "TrChiSqChX",
   "TrChiSqKaY",
   "TrChiSqKaX",
+  "L2ChRes_x",
+  "L2ChRes_y",
+  "L2KaRes_x",
+  "L2KaRes_y",
+  "L34Scat_x",
+  "L34Scat_y",
+  "L56Scat_x",
+  // "L56Scat_y",
+  // "L56ScatBR_y",
+  "L56FeetDist",
   "TrQMin",
-  "TrQAsymm"
+  "TrQAsymm",
 };
 static std::vector<TString> spectatorVars = {
   "Category",
@@ -77,9 +90,7 @@ static std::vector<TString> spectatorVars = {
   "RichBDT"
 };
 
-TTree* GetTrainingTree(Int_t _detCat = detCat){
-
-  cout << "_detCat is " << _detCat << endl;
+TTree* GetTrainingTree(int detCat){
 
   TFile* tempfile = new TFile(".temp.root", "recreate");
 
@@ -87,81 +98,50 @@ TTree* GetTrainingTree(Int_t _detCat = detCat){
 
   Float_t target;
 
-  TString pfilename = "../data/pdata_" + detNames[_detCat] + ".dat";
-  ofstream pfile(pfilename.Data(), ios::trunc);
-
-  std:map<TString, float> varMap;
-  for( auto variable : trainingVars ){
-    varMap[variable] = 0;
-  }
-
   for( auto infileName : inputFiles ){
     TFile* infile = TFile::Open( infileName.c_str() );
     TTree* _tempTree = (TTree*) infile->Get("VFTMVABuildTree/TrainingTree");
 
     Int_t cat;
-    Float_t Mass;
     _tempTree->SetBranchAddress("Category", &cat);
-    _tempTree->SetBranchAddress("Mass"    , &Mass);
-
-    for( auto variable : trainingVars ){
-      _tempTree->SetBranchAddress( variable, &(varMap[variable]) );
-    }
 
     tempfile->cd();
     TTree* _regTree = _tempTree->CloneTree(0);
 
     _regTree->Branch("Target", &target, "F");
 
-    int nSig=0, nBkgp=0, nBkgn=0;
-
-    for( auto variable : trainingVars ){
-      pfile << setw(15) << variable;
-    }
-    pfile << setw(15) << "Target";
-    pfile << endl;
+    int nSig=0, nBkg=0;
 
     for( Long64_t iEv=0; iEv<_tempTree->GetEntries(); iEv++){
       _tempTree->GetEntry(iEv);
 
-      if( (cat/10)%10 != _detCat ) continue;
+      if ((iEv % 1000) == 0) {
+        cout << nSig << "/" << nEntries << "  -  " << nBkg << "/" << nEntries << "\r" << flush;
+      }
+
+      if( TMath::Floor(cat/10) != detCat ) continue;
 
       if( (cat % 10) == 1 && nSig < nEntries ){
         target = 1;
         nSig++;
       }
-      else if( (cat % 10) > 1 && Mass > 0 && nBkgp < nEntries ){
+      else if( (cat % 10) == bkgType && nBkg < nEntries ){
         target = 0;
-        nBkgp++;
-      }
-      else if( (cat % 10) > 1 && Mass < 0 && nBkgn < nEntries ){
-        target = 0;
-        nBkgn++;
+        nBkg++;
       }
       else continue;
 
-      // cout << iEv << " " << cat << " " << target << endl;
-      // break;
-
-      for( auto variable : trainingVars ){
-        pfile << setw(15) << varMap[variable];
-      }
-      pfile << setw(15) << target;
-      pfile << endl;
-
-      if( nSig >= nEntries && nBkgp >= nEntries && nBkgn >= nEntries ) break;
+      if( nSig >= nEntries && nBkg >= nEntries ) break;
 
       _regTree->Fill();
     }
-
-    cout << "Tree filled with " << nSig << " signal, " << nBkgp << "-" << nBkgn
-    <<  " (+-) background" << endl;
 
     treelist->Add(_regTree);
   }
 
   return TTree::MergeTrees(treelist);
 }
+
 
 void TrainClassifier( Int_t _detCat = detCat, TString myMethodList = "" )
 {
@@ -303,6 +283,7 @@ void TrainClassifier( Int_t _detCat = detCat, TString myMethodList = "" )
   for( auto var : trainingVars ){
     dataloader->AddVariable( var, var, "", 'F' );
   }
+  dataloader->AddVariable("L56ScatBR_y := L56Scat_y*(Beta*Rigidity)", "L56ScatBR_y", "", 'F');
 
   // You can add so-called "Spectator variables", which are not used in the MVA training,
   // but will appear in the final "TestTree" produced by TMVA. This TestTree will contain the
@@ -311,7 +292,9 @@ void TrainClassifier( Int_t _detCat = detCat, TString myMethodList = "" )
     dataloader->AddSpectator( var, var, "", 'F' );
   }
 
-  TTree* regTree = GetTrainingTree(_detCat);
+  // TFile* infile = TFile::Open("../data/pass6.root");
+  // TTree* regTree = (TTree*) infile->Get("VFTMVABuildTree/TrainingTree");
+  TTree* regTree = GetTrainingTree(detCat);
 
   // global event weights per tree (see below for setting event-wise weights)
   Double_t signalWeight     = 1.0;
@@ -322,8 +305,12 @@ void TrainClassifier( Int_t _detCat = detCat, TString myMethodList = "" )
   dataloader->AddBackgroundTree( regTree, backgroundWeight );
 
   // Apply additional cuts on the signal and background samples (can be different)
-  TCut mycuts = "Target==1"; // for example: TCut mycuts = "abs(var1)<0.5 && abs(var2-0.5)<1";
-  TCut mycutb = "Target==0 && TMath::Abs(Mass) > 2.8"; // for example: TCut mycutb = "abs(var1)<0.5";
+  TString bkgString = (TString) "(Category%10)==";
+  bkgString += bkgType;
+
+  TCut detCatCut = Form("TMath::Floor(Category/10)==%i", detCat);
+  TCut mycuts = detCatCut + "(Category%10)==1"; // for example: TCut mycuts = "abs(var1)<0.5 && abs(var2-0.5)<1";
+  TCut mycutb = detCatCut + (TCut) bkgString; // for example: TCut mycutb = "abs(var1)<0.5";
 
   // This would set individual event weights (the variables defined in the
   // expression need to exist in the original TTree)
@@ -343,7 +330,8 @@ void TrainClassifier( Int_t _detCat = detCat, TString myMethodList = "" )
   // for training, and the other half for testing:
 
   dataloader->PrepareTrainingAndTestTree( mycuts, mycutb,
-                                       "SplitMode=Random:NormMode=NumEvents:V" );
+    "SplitMode=Random:NormMode=NumEvents:V" );
+    // "SplitMode=Random:nTrain_Signal=10000:NormMode=NumEvents:V" );
 
   // Book MVA methods
   //
@@ -491,6 +479,7 @@ void TrainClassifier( Int_t _detCat = detCat, TString myMethodList = "" )
      // General layout.
      // TString layoutString ("Layout=RELU|256,RELU|256,RELU|256,SIGMOID");
      TString layoutString ("Layout=RELU|384,RELU|384,RELU|384,RELU|128,SIGMOID");
+
 
      TString training0("LearningRate=5e-4,Momentum=0.5,Repetitions=1,ConvergenceSteps=120,BatchSize=256,"
      "TestRepetitions=10,WeightDecay=0.01,Regularization=NONE,DropConfig=0.2,");
