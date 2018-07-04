@@ -51,8 +51,12 @@ using namespace TMVA;
 vector<std::string> inputFiles = {
   "../data/pass6.root",
 };
-// Long64_t nEntries = 1.5e5+1;
-Long64_t nEntries = 1e4+1;
+Long64_t nEntries = 1.5e5+1;
+// Long64_t nEntries = 5e4+1;
+// Long64_t nEntries = 1e4+1;
+
+Long64_t nEntries_sig = 0;
+Long64_t nEntries_bkg = 0;
 
 // Int_t bkgType = 2; //high mass negatives
 Int_t bkgType = 3; //low mass negatives
@@ -69,6 +73,10 @@ static std::vector<TString> trainingVars = {
   "TrChiSqChX",
   "TrChiSqKaY",
   "TrChiSqKaX",
+  "TrHalfRUpCh",
+  "TrHalfRDwCh",
+  "TrHalfRUpKa",
+  "TrHalfRDwKa",
   "L2ChRes_x",
   "L2ChRes_y",
   "L2KaRes_x",
@@ -79,6 +87,7 @@ static std::vector<TString> trainingVars = {
   // "L56Scat_y",
   // "L56ScatBR_y",
   "L56FeetDist",
+  "L2FeetDist",
   "TrQMin",
   "TrQAsymm",
 };
@@ -97,6 +106,7 @@ TTree* GetTrainingTree(int detCat){
   TList* treelist = new TList();
 
   Float_t target;
+  int nSig=0, nBkg=0;
 
   for( auto infileName : inputFiles ){
     TFile* infile = TFile::Open( infileName.c_str() );
@@ -109,8 +119,6 @@ TTree* GetTrainingTree(int detCat){
     TTree* _regTree = _tempTree->CloneTree(0);
 
     _regTree->Branch("Target", &target, "F");
-
-    int nSig=0, nBkg=0;
 
     for( Long64_t iEv=0; iEv<_tempTree->GetEntries(); iEv++){
       _tempTree->GetEntry(iEv);
@@ -139,6 +147,8 @@ TTree* GetTrainingTree(int detCat){
     treelist->Add(_regTree);
   }
 
+  nEntries_sig = nSig;
+  nEntries_bkg = nBkg;
   return TTree::MergeTrees(treelist);
 }
 
@@ -163,6 +173,7 @@ void TrainClassifier( Int_t _detCat = detCat, TString myMethodList = "" )
   //---------------------------------------------------------------
   // This loads the library
   TMVA::Tools::Instance();
+  (TMVA::gConfig().GetVariablePlotting()).fNbinsXOfROCCurve = 1e4;
 
   // Default MVA methods to be trained + tested
   std::map<std::string,int> Use;
@@ -175,9 +186,9 @@ void TrainClassifier( Int_t _detCat = detCat, TString myMethodList = "" )
   Use["CutsSA"]          = 0;
   //
   // 1-dimensional likelihood ("naive Bayes estimator")
-  Use["Likelihood"]      = 0;
-  Use["LikelihoodD"]     = 0; // the "D" extension indicates decorrelated input variables (see option strings)
-  Use["LikelihoodPCA"]   = 0; // the "PCA" extension indicates PCA-transformed input variables (see option strings)
+  Use["Likelihood"]      = 1;
+  Use["LikelihoodD"]     = 1; // the "D" extension indicates decorrelated input variables (see option strings)
+  Use["LikelihoodPCA"]   = 1; // the "PCA" extension indicates PCA-transformed input variables (see option strings)
   Use["LikelihoodKDE"]   = 0;
   Use["LikelihoodMIX"]   = 0;
   //
@@ -211,17 +222,20 @@ void TrainClassifier( Int_t _detCat = detCat, TString myMethodList = "" )
   Use["CFMlpANN"]        = 0; // Depreciated ANN from ALEPH
   Use["TMlpANN"]         = 0; // ROOT's own ANN
   Use["DNN_GPU"]         = 0; // CUDA-accelerated DNN training.
-  Use["DNN_CPU"]         = 1; // Multi-core accelerated DNN.
+  Use["DNN_CPU"]         = 0; // Multi-core accelerated DNN.
   //
   // Support Vector Machine
   Use["SVM"]             = 0;
   //
   // Boosted Decision Trees
   Use["BDT"]             = 1; // uses Adaptive Boost
-  Use["BDTG"]            = 0; // uses Gradient Boost
-  Use["BDTB"]            = 1; // uses Bagging
-  Use["BDTD"]            = 0; // decorrelation + Adaptive Boost
+  Use["BDTG"]            = 1; // uses Gradient Boost
+  Use["BDTB"]            = 0; // uses Bagging
+  Use["BDTD"]            = 1; // decorrelation + Adaptive Boost
+  Use["BDTDS"]           = 0; // decorrelation (sig) + Adaptive Boost
   Use["BDTF"]            = 0; // allow usage of fisher discriminant for node splitting
+  Use["BDTDG"]           = 1; // decorrelation + gauss + uses Adaptive Boost
+  Use["BDTDGS"]          = 0; // decorrelation (sig) + gauss (sig) + uses Adaptive Boost
   //
   // Friedman's RuleFit method, ie, an optimised series of cuts ("rules")
   Use["RuleFit"]         = 0;
@@ -253,7 +267,7 @@ void TrainClassifier( Int_t _detCat = detCat, TString myMethodList = "" )
   // Here the preparation phase begins
 
   // Create a new root output file
-  TString outfileName( Form("TMVAClass_%s.root", detNames[_detCat].Data()) );
+  TString outfileName( Form("TMVAClass_%s_%i.root", detNames[_detCat].Data(), bkgType) );
   TFile* outputFile = TFile::Open( outfileName, "RECREATE" );
 
   // Create the factory object. Later you can choose the methods
@@ -267,10 +281,10 @@ void TrainClassifier( Int_t _detCat = detCat, TString myMethodList = "" )
   // All TMVA output can be suppressed by removing the "!" (not) in
   // front of the "Silent" argument in the option string
   TMVA::Factory *factory = new TMVA::Factory( "TMVAClassification", outputFile,
-                                              "V:!Silent:Color:DrawProgressBar:Transformations=I;D;P;G,D:AnalysisType=Classification" );
+                                              "V:!Silent:Color:DrawProgressBar:Transformations=I;D;P;G,D;G_Signal,D_Signal:AnalysisType=Classification" );
 
 
-  TMVA::DataLoader *dataloader=new TMVA::DataLoader("dataset");
+  TMVA::DataLoader *dataloader=new TMVA::DataLoader(Form("TMVAClass_%s_%i", detNames[_detCat].Data(), bkgType));
   // If you wish to modify default settings
   // (please check "src/Config.h" to see all available global options)
   //
@@ -329,8 +343,11 @@ void TrainClassifier( Int_t _detCat = detCat, TString myMethodList = "" )
   // If no numbers of events are given, half of the events in the tree are used
   // for training, and the other half for testing:
 
+  TString evSepString = "";
+  // evSepString  = Form(":nTrain_Signal=%i", TMath::Floor((int)nEntries_sig/5));
+  // evSepString += Form(":nTrain_Background=%i", TMath::Floor((int)nEntries_bkg/5));
   dataloader->PrepareTrainingAndTestTree( mycuts, mycutb,
-    "SplitMode=Random:NormMode=NumEvents:V" );
+    "SplitMode=Random:NormMode=NumEvents:V"+evSepString );
     // "SplitMode=Random:nTrain_Signal=10000:NormMode=NumEvents:V" );
 
   // Book MVA methods
@@ -532,24 +549,56 @@ void TrainClassifier( Int_t _detCat = detCat, TString myMethodList = "" )
 
   // Boosted Decision Trees
   if (Use["BDTG"]) // Gradient Boost
-     factory->BookMethod( dataloader, TMVA::Types::kBDT, "BDTG",
-                          "!H:V:NTrees=800:MinNodeSize=2.5%:BoostType=Grad:Shrinkage=0.10:UseBaggedBoost:BaggedSampleFraction=0.5:nCuts=50:MaxDepth=5" );
+    factory->BookMethod(
+        dataloader, TMVA::Types::kBDT, "BDTG",
+        "!H:V:NTrees=800:MinNodeSize=2.5%:BoostType=Grad:Shrinkage=0.10:"
+        "UseBaggedBoost:BaggedSampleFraction=0.5:nCuts=50:MaxDepth=5");
 
-  if (Use["BDT"])  // Adaptive Boost
-     factory->BookMethod( dataloader, TMVA::Types::kBDT, "BDT",
-                          "!H:V:NTrees=800:MinNodeSize=2.5%:MaxDepth=5:BoostType=AdaBoost:AdaBoostBeta=0.5:UseBaggedBoost:BaggedSampleFraction=0.5:SeparationType=GiniIndex:nCuts=50" );
+  if (Use["BDT"]) // Adaptive Boost
+    factory->BookMethod(
+        dataloader, TMVA::Types::kBDT, "BDT",
+        "!H:V:NTrees=800:MinNodeSize=2.5%:MaxDepth=5:BoostType=AdaBoost:"
+        "AdaBoostBeta=0.5:UseBaggedBoost:BaggedSampleFraction=0.5:"
+        "SeparationType=GiniIndex:nCuts=50");
 
   if (Use["BDTB"]) // Bagging
-     factory->BookMethod( dataloader, TMVA::Types::kBDT, "BDTB",
-                          "!H:V:NTrees=800:BoostType=Bagging:SeparationType=GiniIndex:nCuts=50" );
+    factory->BookMethod(
+        dataloader, TMVA::Types::kBDT, "BDTB",
+        "!H:V:NTrees=800:BoostType=Bagging:SeparationType=GiniIndex:nCuts=50:"
+        "VarTransform=G_Signal,D_Signal");
 
   if (Use["BDTD"]) // Decorrelation + Adaptive Boost
-     factory->BookMethod( dataloader, TMVA::Types::kBDT, "BDTD",
-                          "!H:V:NTrees=800:MinNodeSize=5%:MaxDepth=5:BoostType=AdaBoost:SeparationType=GiniIndex:nCuts=50:VarTransform=Decorrelate" );
+    factory->BookMethod(
+        dataloader, TMVA::Types::kBDT, "BDTD",
+        "!H:V:NTrees=800:MinNodeSize=2.5%:MaxDepth=5:BoostType=AdaBoost:"
+        "AdaBoostBeta=0.5:UseBaggedBoost:BaggedSampleFraction=0.5:"
+        "SeparationType=GiniIndex:nCuts=50:VarTransform=D");
 
-  if (Use["BDTF"])  // Allow Using Fisher discriminant in node splitting for (strong) linearly correlated variables
-     factory->BookMethod( dataloader, TMVA::Types::kBDT, "BDTF",
-                          "!H:V:NTrees=800:MinNodeSize=2.5%:UseFisherCuts:MaxDepth=5:BoostType=AdaBoost:AdaBoostBeta=0.5:SeparationType=GiniIndex:nCuts=50" );
+  if (Use["BDTDS"]) // Decorrelation + Adaptive Boost
+    factory->BookMethod(
+        dataloader, TMVA::Types::kBDT, "BDTDS",
+        "!H:V:NTrees=800:MinNodeSize=2.5%:MaxDepth=5:BoostType=AdaBoost:"
+        "AdaBoostBeta=0.5:UseBaggedBoost:BaggedSampleFraction=0.5:"
+        "SeparationType=GiniIndex:nCuts=50:VarTransform=D_Signal");
+
+  if (Use["BDTF"]) // Allow Using Fisher discriminant in node splitting for
+                   // (strong) linearly correlated variables
+    factory->BookMethod(
+        dataloader, TMVA::Types::kBDT, "BDTF",
+        "!H:V:NTrees=800:MinNodeSize=2.5%:UseFisherCuts:MaxDepth=5:BoostType="
+        "AdaBoost:AdaBoostBeta=0.5:SeparationType=GiniIndex:nCuts=50");
+
+  if (Use["BDTDG"]) // Gauss + Decorrelation + Adaptive Boost
+    factory->BookMethod(
+        dataloader, TMVA::Types::kBDT, "BDTDG",
+        "!H:V:NTrees=800:MinNodeSize=5%:MaxDepth=5:BoostType=AdaBoost:"
+        "SeparationType=GiniIndex:nCuts=50:VarTransform=G,D");
+
+  if (Use["BDTDGS"]) // Gauss + Decorrelation + Adaptive Boost
+    factory->BookMethod(
+        dataloader, TMVA::Types::kBDT, "BDTDGS",
+        "!H:V:NTrees=800:MinNodeSize=5%:MaxDepth=5:BoostType=AdaBoost:"
+        "SeparationType=GiniIndex:nCuts=50:VarTransform=G_Signal,D_Signal");
 
   // RuleFit -- TMVA implementation of Friedman's method
   if (Use["RuleFit"])
